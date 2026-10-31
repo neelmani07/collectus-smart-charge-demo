@@ -9,6 +9,7 @@ import {
   payInstallment,
   resetDemo,
 } from "./api";
+import { PaymentStory } from "./PaymentStory";
 import type {
   Customer,
   Installment,
@@ -39,16 +40,30 @@ export default function App() {
   const [installments, setInstallments] = useState<Installment[]>([]);
   const [history, setHistory] = useState<OrchestrationResult[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [payTarget, setPayTarget] = useState<Installment | null>(null);
   const [plan, setPlan] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<OrchestrationResult | null>(null);
+  const [showStory, setShowStory] = useState(false);
+  const [storySteps, setStorySteps] = useState(0);
 
   const customer = useMemo(
     () => customers.find((c) => c.customer_id === customerId) ?? null,
     [customers, customerId],
   );
+
+  const otherOverdueIfPay = useMemo(() => {
+    if (!payTarget) return 0;
+    return installments
+      .filter(
+        (i) =>
+          i.installment_id !== payTarget.installment_id &&
+          (i.status === "due" || i.status === "overdue"),
+      )
+      .reduce((sum, i) => sum + i.amount, 0);
+  }, [payTarget, installments]);
 
   const load = useCallback(async (selected?: string) => {
     const activeId = selected ?? customerId;
@@ -61,9 +76,10 @@ export default function App() {
     setProducts(catalog);
     setHistory(decisions);
 
-    const nextId = activeId && list.some((c) => c.customer_id === activeId)
-      ? activeId
-      : list[0]?.customer_id ?? "";
+    const nextId =
+      activeId && list.some((c) => c.customer_id === activeId)
+        ? activeId
+        : (list[0]?.customer_id ?? "");
     setCustomerId(nextId);
 
     if (nextId) {
@@ -88,6 +104,15 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(null), 4200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!showStory || !lastResult) return;
+    setStorySteps(0);
+    const timers = [1, 2, 3, 4].map((step, index) =>
+      window.setTimeout(() => setStorySteps(step), 450 + index * 700),
+    );
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [showStory, lastResult?.event_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function onCustomerChange(id: string) {
     setCustomerId(id);
@@ -120,17 +145,16 @@ export default function App() {
     }
   }
 
-  async function onPay(installmentId: string) {
-    if (!customer) return;
+  async function confirmPay() {
+    if (!customer || !payTarget) return;
     setLoading(true);
     setError(null);
     try {
-      const result = await payInstallment(installmentId, customer.customer_id);
+      const result = await payInstallment(payTarget.installment_id, customer.customer_id);
+      setPayTarget(null);
       setLastResult(result);
+      setShowStory(true);
       setTab("activity");
-      setToast(
-        `Paid ${money(result.currency, result.amount_paid)} · Smart decision: ${result.decision.action}`,
-      );
       await load(customer.customer_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Payment failed");
@@ -146,6 +170,8 @@ export default function App() {
       await resetDemo();
       setLastResult(null);
       setSelectedProduct(null);
+      setPayTarget(null);
+      setShowStory(false);
       setToast("Demo data reset");
       await load("");
       setTab("shop");
@@ -192,7 +218,7 @@ export default function App() {
           [
             ["shop", "Shop"],
             ["payments", "My payments"],
-            ["activity", "Smart activity"],
+            ["activity", "How Smart Autocharge works"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -210,13 +236,13 @@ export default function App() {
         <div className="hero-card">
           <h2>Own your dream. Pay your way.</h2>
           <p>
-            Shop with installments, pay the first amount today, then manage upcoming payments —
-            just like Tamara. When you repay, AI may smart-autocharge remaining overdue.
+            Shop in installments like Tamara. When you repay, AI decides whether Autopay should
+            also collect other overdue — that’s Smart Autocharge.
           </p>
           <div className="pill-row">
             <span className="pill">Sharia compliant</span>
             <span className="pill">No late fees</span>
-            <span className="pill">Pay in 3 or 4</span>
+            <span className="pill">AI decides Autopay</span>
           </div>
         </div>
         <div className="panel stat-card">
@@ -297,6 +323,22 @@ export default function App() {
 
       {tab === "payments" ? (
         <section className="panel">
+          <div className="explain-banner">
+            <div>
+              <strong>How Pay now triggers Smart Autocharge</strong>
+              <p>
+                <span>1</span> You pay one installment (your choice)
+                <span>2</span> That creates a repayment event
+                <span>3</span> AI checks if other overdue should be autocharged
+                <span>4</span> Autopay runs only if AI says yes
+              </p>
+            </div>
+            <p className="muted tip">
+              Tip: pay an <strong>overdue</strong> item for Aisha (charge) or Omar (skip) to see AI
+              clearly.
+            </p>
+          </div>
+
           <div className="panel-head">
             <h2 className="section-title">My payments</h2>
             <p className="muted">Upcoming, due, and overdue installments by purchase</p>
@@ -334,7 +376,7 @@ export default function App() {
                             type="button"
                             className="pay-btn"
                             disabled={loading}
-                            onClick={() => onPay(inst.installment_id)}
+                            onClick={() => setPayTarget(inst)}
                           >
                             Pay now
                           </button>
@@ -355,39 +397,52 @@ export default function App() {
         <>
           <section className="panel">
             <div className="panel-head">
-              <h2 className="section-title">Latest smart decision</h2>
-              <p className="muted">Repayment event → AI decide → Autopay</p>
+              <h2 className="section-title">AI’s role in one sentence</h2>
             </div>
-            {lastResult ? (
+            <p className="role-line">
+              After you repay, <strong>AI is the decision brain</strong> between “customer was
+              active” and “Autopay may charge other overdue.” Without AI we would always charge —
+              which is aggressive and wasteful.
+            </p>
+            {!lastResult ? (
+              <p className="muted">
+                Pay a due/overdue installment in <strong>My payments</strong> to see the live
+                story.
+              </p>
+            ) : (
+              <button type="button" className="ghost" onClick={() => setShowStory(true)}>
+                Replay last payment story
+              </button>
+            )}
+          </section>
+
+          {lastResult ? (
+            <section className="panel">
+              <div className="panel-head">
+                <h2 className="section-title">Latest result</h2>
+                <p className="muted">Your pay vs what AI told Autopay to do</p>
+              </div>
               <div className="compare">
                 <div className="compare-card">
-                  <h3>Always charge (baseline)</h3>
-                  <span className="tag tag-charge">charge</span>
-                  <p>
-                    Would blindly autocharge all overdue {money(lastResult.currency, lastResult.overdue_before)}{" "}
-                    after every repayment.
-                  </p>
+                  <h3>You paid (RPM)</h3>
+                  <p className="score">{money(lastResult.currency, lastResult.amount_paid)}</p>
+                  <p className="muted">Voluntary installment repayment — always happens first.</p>
                 </div>
                 <div className="compare-card smart">
-                  <h3>Smart Autocharge</h3>
+                  <h3>AI → Autopay</h3>
                   <span className={actionClass(lastResult.decision.action)}>
                     {lastResult.decision.action}
                   </span>
                   <div className="score">{lastResult.decision.score.toFixed(2)}</div>
                   <p>{lastResult.decision.reason}</p>
                   <p className="muted">
-                    Paid installment {money(lastResult.currency, lastResult.amount_paid)} · Overdue{" "}
-                    {lastResult.overdue_before.toFixed(2)} → {lastResult.overdue_after.toFixed(2)} ·{" "}
-                    {lastResult.autopay?.message}
+                    Other overdue {lastResult.overdue_before.toFixed(2)} →{" "}
+                    {lastResult.overdue_after.toFixed(2)} · {lastResult.autopay?.message}
                   </p>
                 </div>
               </div>
-            ) : (
-              <p className="muted">
-                Pay a due/overdue installment in My payments to trigger RPM → AI → Autopay.
-              </p>
-            )}
-          </section>
+            </section>
+          ) : null}
 
           <section className="panel">
             <h2 className="section-title">Activity log</h2>
@@ -398,8 +453,8 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Customer</th>
-                    <th>Paid</th>
-                    <th>AI</th>
+                    <th>You paid</th>
+                    <th>AI said</th>
                     <th>Score</th>
                     <th>Autopay</th>
                   </tr>
@@ -427,12 +482,7 @@ export default function App() {
 
       {selectedProduct && customer ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setSelectedProduct(null)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <h3>{selectedProduct.name}</h3>
             <p className="muted">
               {selectedProduct.merchant} · {money(selectedProduct.currency, selectedProduct.price)}
@@ -473,6 +523,65 @@ export default function App() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {payTarget && customer ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setPayTarget(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <p className="story-kicker">Before you pay</p>
+            <h3>
+              Pay installment {payTarget.sequence}/{payTarget.plan_size}
+            </h3>
+            <p className="muted">
+              {payTarget.product_name} · {money(payTarget.currency, payTarget.amount)} ·{" "}
+              <span className={statusClass(payTarget.status)}>{payTarget.status}</span>
+            </p>
+
+            <div className="prepay-flow">
+              <div className="prepay-step">
+                <strong>A. Your payment</strong>
+                <p>We collect this installment now (RPM repayment).</p>
+              </div>
+              <div className="prepay-step ai">
+                <strong>B. AI decision</strong>
+                <p>
+                  AI then reviews <strong>other overdue</strong> still open
+                  {otherOverdueIfPay > 0
+                    ? ` (${money(payTarget.currency, otherOverdueIfPay)})`
+                    : " (none right now)"}
+                  .
+                </p>
+              </div>
+              <div className="prepay-step">
+                <strong>C. Autopay</strong>
+                <p>
+                  Only if AI says charge/partial, Autopay hits the saved card for that extra
+                  overdue — not for the installment you just chose to pay.
+                </p>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={() => setPayTarget(null)}>
+                Cancel
+              </button>
+              <button type="button" className="primary" disabled={loading} onClick={confirmPay}>
+                {loading ? "Running Smart Autocharge…" : "Confirm pay & run AI"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showStory && lastResult ? (
+        <PaymentStory
+          result={lastResult}
+          visibleSteps={storySteps}
+          onClose={() => {
+            setShowStory(false);
+            setTab("payments");
+          }}
+        />
       ) : null}
 
       {toast ? <div className="toast">{toast}</div> : null}
