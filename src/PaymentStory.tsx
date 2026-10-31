@@ -1,140 +1,166 @@
-import type { OrchestrationResult } from "./types";
+import type { PaymentDetail, PaymentHistoryItem, PaymentType } from "./types";
 
 function money(currency: string, amount: number) {
   return `${currency} ${amount.toFixed(2)}`;
 }
 
-function actionClass(action: string) {
-  return `tag tag-${action}`;
+function typeLabel(type: PaymentType) {
+  if (type === "manual_repayment") return "Manual repayment";
+  if (type === "normal_autocharge") return "Normal autocharge";
+  return "Smart autocharge";
+}
+
+function typeClass(type: PaymentType) {
+  return `tag tag-type-${type}`;
 }
 
 type Props = {
-  result: OrchestrationResult;
+  detail: PaymentDetail;
   visibleSteps: number;
   onClose: () => void;
 };
 
-export function PaymentStory({ result, visibleSteps, onClose }: Props) {
-  const aiAction = result.decision.action;
-  const autopayStatus = result.autopay?.status ?? "skipped";
-  const settled = result.autopay?.installments_settled?.length ?? 0;
+export function PaymentStory({ detail, visibleSteps, onClose }: Props) {
+  const orchestration = detail.orchestration;
+  const byType = (type: PaymentType) =>
+    detail.history.find((h) => h.payment_type === type) as PaymentHistoryItem | undefined;
+
+  const manual = byType("manual_repayment");
+  const normal = byType("normal_autocharge");
+  const smart = byType("smart_autocharge");
+  const currency = manual?.currency ?? smart?.currency ?? "SAR";
 
   const steps = [
     {
-      title: "1 · You paid an installment",
+      title: "1 · Manual repayment",
+      body: manual ? (
+        <>
+          Customer paid <strong>{money(currency, manual.amount)}</strong> for their own installment
+          {manual.product_name ? ` · ${manual.product_name}` : ""}. This is a normal repayment — no
+          AI involved yet.
+        </>
+      ) : (
+        <>No manual repayment on this event.</>
+      ),
+      meta: manual ? `Status: ${manual.status}` : null,
+    },
+    {
+      title: "2 · Repayment event",
       body: (
         <>
-          Your voluntary payment of <strong>{money(result.currency, result.amount_paid)}</strong> succeeded.
-          This is a normal customer repayment (RPM).
+          System published <code>repayment.succeeded</code>. That activity signal is what wakes
+          collection logic — instead of waiting for a blind cron job.
         </>
       ),
-      meta: result.order_snapshot
-        ? `${result.order_snapshot.product_name} · ${result.order_snapshot.merchant}`
+      meta: `event: ${detail.event_id.slice(0, 18)}…`,
+    },
+    {
+      title: "3 · Normal autocharge (baseline)",
+      body: normal ? (
+        <>
+          Without AI, cron-style autocharge would try to collect{" "}
+          <strong>{money(currency, normal.amount)}</strong> of remaining overdue automatically —
+          every time, no judgment.
+        </>
+      ) : (
+        <>No baseline recorded.</>
+      ),
+      meta: normal
+        ? `${typeLabel("normal_autocharge")} · ${normal.status.replaceAll("_", " ")}`
         : null,
     },
     {
-      title: "2 · Repayment event fired",
-      body: (
+      title: "4 · Smart autocharge (AI + Autopay)",
+      body: smart ? (
         <>
-          Backend published <code>repayment.succeeded</code>. Collections listened — this is the
-          moment Smart Autocharge wakes up (instead of waiting for a nightly cron).
-        </>
-      ),
-      meta: `event: ${result.event_id.slice(0, 18)}…`,
-    },
-    {
-      title: "3 · AI decided what to do next",
-      body: (
-        <>
-          AI looked at <strong>other overdue</strong> still left after your payment (
-          {money(result.currency, result.overdue_before)}), plus payment-method health and recent
-          fails. It chose{" "}
-          <span className={actionClass(aiAction)}>{aiAction}</span>
-          {aiAction === "skip"
-            ? " — do not autocharge more now."
-            : aiAction === "partial"
-              ? " — recover only part of the overdue."
-              : " — autocharge the overdue now."}
-        </>
-      ),
-      meta: `Score ${result.decision.score.toFixed(2)} · ${result.decision.reason}`,
-      highlight: true,
-    },
-    {
-      title: "4 · Autopay executed the decision",
-      body: (
-        <>
-          {autopayStatus === "success" ? (
+          AI reviewed remaining overdue and chose{" "}
+          <strong>{String(smart.details.ai_action ?? "—")}</strong>
+          {smart.details.ai_reason ? <> — {String(smart.details.ai_reason)}</> : null}.{" "}
+          {smart.status === "succeeded" ? (
             <>
-              Autopay charged <strong>{money(result.currency, result.decision.amount)}</strong> on
-              your saved payment method and settled {settled} overdue installment
-              {settled === 1 ? "" : "s"}. Overdue went{" "}
-              <strong>
-                {result.overdue_before.toFixed(2)} → {result.overdue_after.toFixed(2)}
-              </strong>
-              .
+              Autopay then charged <strong>{money(currency, smart.amount)}</strong>.
             </>
-          ) : autopayStatus === "failed" ? (
-            <>Autopay tried but the issuer declined. No extra installments were settled.</>
-          ) : result.overdue_before <= 0 ? (
-            <>No other overdue remained, so Autopay had nothing extra to charge.</>
+          ) : smart.status === "skipped_by_ai" ? (
+            <>Autopay did <strong>not</strong> charge extra — AI skipped.</>
+          ) : smart.status === "nothing_due" ? (
+            <>Nothing else was overdue, so Autopay had no extra work.</>
           ) : (
-            <>
-              Autopay <strong>did not charge</strong> more — AI said skip. Remaining overdue stays{" "}
-              {money(result.currency, result.overdue_after)}.
-            </>
+            <>Autopay status: {smart.status.replaceAll("_", " ")}.</>
           )}
         </>
+      ) : (
+        <>No smart autocharge row.</>
       ),
-      meta: result.autopay?.message ?? null,
+      meta: smart
+        ? `Score ${Number(smart.details.ai_score ?? orchestration?.decision.score ?? 0).toFixed(2)} · ${smart.status}`
+        : null,
+      highlight: true,
     },
   ];
 
   return (
-    <div className="modal-backdrop" role="presentation">
-      <div className="modal story-modal" role="dialog" aria-modal="true">
-        <p className="story-kicker">What just happened</p>
-        <h3>Payment → AI → Autopay</h3>
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal story-modal"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="story-kicker">Payment details</p>
+        <h3>How this payment was processed</h3>
         <p className="muted story-lede">
-          Your payment is separate from Smart Autocharge. Paying triggers the AI, which may then
-          ask Autopay to collect other overdue — or wisely skip.
+          Customer only paid their installment. Behind the scenes we also record what{" "}
+          <em>normal</em> autocharge would do vs what <em>smart</em> autocharge did.
         </p>
 
         <div className="story-compare">
           <div className="mini-card">
-            <span className="mini-label">Blind baseline</span>
-            <strong>Always autocharge</strong>
-            <p>Would charge all {money(result.currency, result.overdue_before)} overdue every time.</p>
+            <span className="mini-label">Normal autocharge</span>
+            <strong className={typeClass("normal_autocharge")}>Cron-style</strong>
+            <p>
+              {normal
+                ? `Would charge ${money(currency, normal.amount)} overdue`
+                : "—"}
+            </p>
           </div>
           <div className="mini-card smart">
-            <span className="mini-label">Our AI</span>
-            <strong className={actionClass(aiAction)}>{aiAction}</strong>
-            <p>{result.decision.reason}</p>
+            <span className="mini-label">Smart autocharge</span>
+            <strong className={typeClass("smart_autocharge")}>
+              {String(smart?.details.ai_action ?? smart?.status ?? "—")}
+            </strong>
+            <p>{String(smart?.details.ai_reason ?? "AI decision + Autopay")}</p>
           </div>
         </div>
 
+        <div className="type-legend">
+          {detail.history.map((item) => (
+            <div key={item.history_id} className="legend-row">
+              <span className={typeClass(item.payment_type)}>{typeLabel(item.payment_type)}</span>
+              <span>{money(item.currency, item.amount)}</span>
+              <span className="muted">{item.status.replaceAll("_", " ")}</span>
+            </div>
+          ))}
+        </div>
+
         <ol className="story-steps">
-          {steps.map((step, index) => {
-            const active = index < visibleSteps;
-            return (
-              <li
-                key={step.title}
-                className={`story-step ${active ? "visible" : ""} ${step.highlight ? "ai" : ""}`}
-              >
-                <div className="story-rail" aria-hidden />
-                <div className="story-copy">
-                  <h4>{step.title}</h4>
-                  <p>{step.body}</p>
-                  {step.meta ? <p className="muted meta">{step.meta}</p> : null}
-                </div>
-              </li>
-            );
-          })}
+          {steps.map((step, index) => (
+            <li
+              key={step.title}
+              className={`story-step ${index < visibleSteps ? "visible" : ""} ${step.highlight ? "ai" : ""}`}
+            >
+              <div className="story-rail" aria-hidden />
+              <div className="story-copy">
+                <h4>{step.title}</h4>
+                <p>{step.body}</p>
+                {step.meta ? <p className="muted meta">{step.meta}</p> : null}
+              </div>
+            </li>
+          ))}
         </ol>
 
         <div className="modal-actions">
           <button type="button" className="primary" onClick={onClose}>
-            Got it — view my payments
+            Close
           </button>
         </div>
       </div>

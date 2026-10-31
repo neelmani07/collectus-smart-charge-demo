@@ -1,6 +1,7 @@
 export type DecisionAction = "charge" | "partial" | "skip";
 export type InstallmentStatus = "paid" | "upcoming" | "due" | "overdue";
-export type Tab = "shop" | "payments" | "activity";
+export type Tab = "shop" | "payments" | "history";
+export type PaymentType = "manual_repayment" | "normal_autocharge" | "smart_autocharge";
 
 export interface Customer {
   customer_id: string;
@@ -92,4 +93,26 @@ export interface OrchestrationResult {
   overdue_after: number;
   created_at: string;
   order_snapshot: Order | null;
+}
+
+export interface PaymentHistoryItem {
+  history_id: string;
+  event_id: string | null;
+  customer_id: string;
+  payment_type: PaymentType;
+  title: string;
+  amount: number;
+  currency: string;
+  status: string;
+  product_name: string;
+  merchant: string;
+  installment_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PaymentDetail {
+  event_id: string;
+  history: PaymentHistoryItem[];
+  orchestration: OrchestrationResult | null;
 }

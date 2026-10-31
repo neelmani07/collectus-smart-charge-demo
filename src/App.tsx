@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   checkout,
   fetchCustomers,
-  fetchDecisions,
-  fetchInstallments,
   fetchOrders,
+  fetchPaymentDetail,
+  fetchPaymentHistory,
   fetchProducts,
   payInstallment,
   resetDemo,
@@ -13,8 +13,10 @@ import { PaymentStory } from "./PaymentStory";
 import type {
   Customer,
   Installment,
-  OrchestrationResult,
   Order,
+  PaymentDetail,
+  PaymentHistoryItem,
+  PaymentType,
   Product,
   Tab,
 } from "./types";
@@ -27,8 +29,22 @@ function statusClass(status: string) {
   return `tag tag-${status}`;
 }
 
-function actionClass(action: string) {
-  return `tag tag-${action}`;
+function typeLabel(type: PaymentType) {
+  if (type === "manual_repayment") return "Manual repayment";
+  if (type === "normal_autocharge") return "Normal autocharge";
+  return "Smart autocharge";
+}
+
+function typeClass(type: PaymentType) {
+  return `tag tag-type-${type}`;
+}
+
+function formatWhen(iso: string) {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 export default function App() {
@@ -37,44 +53,34 @@ export default function App() {
   const [customerId, setCustomerId] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [installments, setInstallments] = useState<Installment[]>([]);
-  const [history, setHistory] = useState<OrchestrationResult[]>([]);
+  const [history, setHistory] = useState<PaymentHistoryItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [payTarget, setPayTarget] = useState<Installment | null>(null);
   const [plan, setPlan] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<OrchestrationResult | null>(null);
-  const [showStory, setShowStory] = useState(false);
+  const [detail, setDetail] = useState<PaymentDetail | null>(null);
   const [storySteps, setStorySteps] = useState(0);
+  const [historyFilter, setHistoryFilter] = useState<"all" | PaymentType>("all");
 
   const customer = useMemo(
     () => customers.find((c) => c.customer_id === customerId) ?? null,
     [customers, customerId],
   );
 
-  const otherOverdueIfPay = useMemo(() => {
-    if (!payTarget) return 0;
-    return installments
-      .filter(
-        (i) =>
-          i.installment_id !== payTarget.installment_id &&
-          (i.status === "due" || i.status === "overdue"),
-      )
-      .reduce((sum, i) => sum + i.amount, 0);
-  }, [payTarget, installments]);
+  const filteredHistory = useMemo(() => {
+    if (historyFilter === "all") return history;
+    return history.filter((h) => h.payment_type === historyFilter);
+  }, [history, historyFilter]);
 
   const load = useCallback(async (selected?: string) => {
     const activeId = selected ?? customerId;
-    const [{ customers: list }, { products: catalog }, { decisions }] = await Promise.all([
+    const [{ customers: list }, { products: catalog }] = await Promise.all([
       fetchCustomers(),
       fetchProducts(),
-      fetchDecisions(),
     ]);
     setCustomers(list);
     setProducts(catalog);
-    setHistory(decisions);
 
     const nextId =
       activeId && list.some((c) => c.customer_id === activeId)
@@ -83,15 +89,15 @@ export default function App() {
     setCustomerId(nextId);
 
     if (nextId) {
-      const [{ orders: orderList }, { installments: installmentList }] = await Promise.all([
+      const [{ orders: orderList }, { history: paymentHistory }] = await Promise.all([
         fetchOrders(nextId),
-        fetchInstallments(nextId),
+        fetchPaymentHistory(nextId),
       ]);
       setOrders(orderList);
-      setInstallments(installmentList);
+      setHistory(paymentHistory);
     } else {
       setOrders([]);
-      setInstallments([]);
+      setHistory([]);
     }
   }, [customerId]);
 
@@ -101,28 +107,32 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 4200);
+    const timer = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
   useEffect(() => {
-    if (!showStory || !lastResult) return;
+    if (!detail) return;
     setStorySteps(0);
     const timers = [1, 2, 3, 4].map((step, index) =>
-      window.setTimeout(() => setStorySteps(step), 450 + index * 700),
+      window.setTimeout(() => setStorySteps(step), 350 + index * 550),
     );
     return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [showStory, lastResult?.event_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [detail?.event_id]);
 
   async function onCustomerChange(id: string) {
     setCustomerId(id);
     setError(null);
     try {
-      const [{ orders: orderList }, { installments: installmentList }, { customers: list }] =
-        await Promise.all([fetchOrders(id), fetchInstallments(id), fetchCustomers()]);
+      const [{ orders: orderList }, { history: paymentHistory }, { customers: list }] =
+        await Promise.all([
+          fetchOrders(id),
+          fetchPaymentHistory(id),
+          fetchCustomers(),
+        ]);
       setCustomers(list);
       setOrders(orderList);
-      setInstallments(installmentList);
+      setHistory(paymentHistory);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load customer");
     }
@@ -135,7 +145,7 @@ export default function App() {
     try {
       const result = await checkout(customer.customer_id, selectedProduct.product_id, plan);
       setSelectedProduct(null);
-      setToast(result.message);
+      setToast(`Paid ${money(result.order.currency, result.first_payment_amount)} · order created`);
       setTab("payments");
       await load(customer.customer_id);
     } catch (err) {
@@ -145,19 +155,31 @@ export default function App() {
     }
   }
 
-  async function confirmPay() {
-    if (!customer || !payTarget) return;
+  async function onPay(inst: Installment) {
+    if (!customer) return;
     setLoading(true);
     setError(null);
     try {
-      const result = await payInstallment(payTarget.installment_id, customer.customer_id);
-      setPayTarget(null);
-      setLastResult(result);
-      setShowStory(true);
-      setTab("activity");
+      await payInstallment(inst.installment_id, customer.customer_id);
+      setToast(`Payment successful · ${money(inst.currency, inst.amount)}`);
       await load(customer.customer_id);
+      setTab("history");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Payment failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openDetails(eventId: string | null) {
+    if (!eventId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = await fetchPaymentDetail(eventId);
+      setDetail(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load details");
     } finally {
       setLoading(false);
     }
@@ -168,10 +190,8 @@ export default function App() {
     setError(null);
     try {
       await resetDemo();
-      setLastResult(null);
       setSelectedProduct(null);
-      setPayTarget(null);
-      setShowStory(false);
+      setDetail(null);
       setToast("Demo data reset");
       await load("");
       setTab("shop");
@@ -182,7 +202,9 @@ export default function App() {
     }
   }
 
-  const overdueCount = installments.filter((i) => i.status === "overdue" || i.status === "due").length;
+  const overdueCount = orders
+    .flatMap((o) => o.installments)
+    .filter((i) => i.status === "overdue" || i.status === "due").length;
 
   return (
     <div className="app">
@@ -218,7 +240,7 @@ export default function App() {
           [
             ["shop", "Shop"],
             ["payments", "My payments"],
-            ["activity", "How Smart Autocharge works"],
+            ["history", "Payment history"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -236,13 +258,13 @@ export default function App() {
         <div className="hero-card">
           <h2>Own your dream. Pay your way.</h2>
           <p>
-            Shop in installments like Tamara. When you repay, AI decides whether Autopay should
-            also collect other overdue — that’s Smart Autocharge.
+            Shop in installments. Pay only what you owe when you want — just like Tamara. Smart
+            Autocharge runs quietly in the background; inspect it anytime in Payment history.
           </p>
           <div className="pill-row">
             <span className="pill">Sharia compliant</span>
             <span className="pill">No late fees</span>
-            <span className="pill">AI decides Autopay</span>
+            <span className="pill">Pay in 3 or 4</span>
           </div>
         </div>
         <div className="panel stat-card">
@@ -262,14 +284,13 @@ export default function App() {
                 <span>Payment method health</span>
               </div>
               <div className="stat">
-                <strong>{customer.fails_7d}</strong>
-                <span>Fails (7d)</span>
+                <strong>{history.length}</strong>
+                <span>History entries</span>
               </div>
             </div>
           ) : (
             <p className="muted">Loading customer…</p>
           )}
-          {customer ? <p className="muted">{customer.notes}</p> : null}
         </div>
       </section>
 
@@ -323,25 +344,9 @@ export default function App() {
 
       {tab === "payments" ? (
         <section className="panel">
-          <div className="explain-banner">
-            <div>
-              <strong>How Pay now triggers Smart Autocharge</strong>
-              <p>
-                <span>1</span> You pay one installment (your choice)
-                <span>2</span> That creates a repayment event
-                <span>3</span> AI checks if other overdue should be autocharged
-                <span>4</span> Autopay runs only if AI says yes
-              </p>
-            </div>
-            <p className="muted tip">
-              Tip: pay an <strong>overdue</strong> item for Aisha (charge) or Omar (skip) to see AI
-              clearly.
-            </p>
-          </div>
-
           <div className="panel-head">
             <h2 className="section-title">My payments</h2>
-            <p className="muted">Upcoming, due, and overdue installments by purchase</p>
+            <p className="muted">Pay your installment — that’s all you need to do here</p>
           </div>
           {orders.length === 0 ? (
             <p className="muted">No purchases yet — grab something from Shop.</p>
@@ -376,9 +381,9 @@ export default function App() {
                             type="button"
                             className="pay-btn"
                             disabled={loading}
-                            onClick={() => setPayTarget(inst)}
+                            onClick={() => onPay(inst)}
                           >
-                            Pay now
+                            Pay {money(inst.currency, inst.amount)}
                           </button>
                         ) : (
                           <span className="muted">Paid</span>
@@ -393,91 +398,76 @@ export default function App() {
         </section>
       ) : null}
 
-      {tab === "activity" ? (
-        <>
-          <section className="panel">
-            <div className="panel-head">
-              <h2 className="section-title">AI’s role in one sentence</h2>
-            </div>
-            <p className="role-line">
-              After you repay, <strong>AI is the decision brain</strong> between “customer was
-              active” and “Autopay may charge other overdue.” Without AI we would always charge —
-              which is aggressive and wasteful.
-            </p>
-            {!lastResult ? (
-              <p className="muted">
-                Pay a due/overdue installment in <strong>My payments</strong> to see the live
-                story.
-              </p>
-            ) : (
-              <button type="button" className="ghost" onClick={() => setShowStory(true)}>
-                Replay last payment story
+      {tab === "history" ? (
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="section-title">Payment history</h2>
+            <p className="muted">Manual · Normal autocharge · Smart autocharge</p>
+          </div>
+
+          <div className="history-filters">
+            {(
+              [
+                ["all", "All"],
+                ["manual_repayment", "Manual repayment"],
+                ["normal_autocharge", "Normal autocharge"],
+                ["smart_autocharge", "Smart autocharge"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={`chip ${historyFilter === id ? "active" : ""}`}
+                onClick={() => setHistoryFilter(id)}
+              >
+                {label}
               </button>
-            )}
-          </section>
+            ))}
+          </div>
 
-          {lastResult ? (
-            <section className="panel">
-              <div className="panel-head">
-                <h2 className="section-title">Latest result</h2>
-                <p className="muted">Your pay vs what AI told Autopay to do</p>
-              </div>
-              <div className="compare">
-                <div className="compare-card">
-                  <h3>You paid (RPM)</h3>
-                  <p className="score">{money(lastResult.currency, lastResult.amount_paid)}</p>
-                  <p className="muted">Voluntary installment repayment — always happens first.</p>
-                </div>
-                <div className="compare-card smart">
-                  <h3>AI → Autopay</h3>
-                  <span className={actionClass(lastResult.decision.action)}>
-                    {lastResult.decision.action}
-                  </span>
-                  <div className="score">{lastResult.decision.score.toFixed(2)}</div>
-                  <p>{lastResult.decision.reason}</p>
-                  <p className="muted">
-                    Other overdue {lastResult.overdue_before.toFixed(2)} →{" "}
-                    {lastResult.overdue_after.toFixed(2)} · {lastResult.autopay?.message}
-                  </p>
-                </div>
-              </div>
-            </section>
-          ) : null}
-
-          <section className="panel">
-            <h2 className="section-title">Activity log</h2>
-            {history.length === 0 ? (
-              <p className="muted">No smart decisions yet.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Customer</th>
-                    <th>You paid</th>
-                    <th>AI said</th>
-                    <th>Score</th>
-                    <th>Autopay</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.map((row) => (
-                    <tr key={row.event_id}>
-                      <td>{row.customer_name}</td>
-                      <td>{money(row.currency, row.amount_paid)}</td>
-                      <td>
-                        <span className={actionClass(row.decision.action)}>
-                          {row.decision.action}
-                        </span>
-                      </td>
-                      <td>{row.decision.score.toFixed(2)}</td>
-                      <td>{row.autopay?.status ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </section>
-        </>
+          {filteredHistory.length === 0 ? (
+            <p className="muted">No payments yet. Pay an installment to populate history.</p>
+          ) : (
+            <div className="history-list">
+              {filteredHistory.map((item) => (
+                <article key={item.history_id} className="history-row">
+                  <div className="history-main">
+                    <div className="history-top">
+                      <span className={typeClass(item.payment_type)}>
+                        {typeLabel(item.payment_type)}
+                      </span>
+                      <span className="muted">{formatWhen(item.created_at)}</span>
+                    </div>
+                    <strong>{item.title}</strong>
+                    <div className="muted">
+                      {item.product_name ? `${item.merchant} · ${item.product_name} · ` : ""}
+                      {item.status.replaceAll("_", " ")}
+                    </div>
+                  </div>
+                  <div className="history-side">
+                    <div className="history-amount">{money(item.currency, item.amount)}</div>
+                    {item.event_id ? (
+                      <button
+                        type="button"
+                        className="icon-detail"
+                        aria-label="View payment details"
+                        title="View details"
+                        disabled={loading}
+                        onClick={() => openDetails(item.event_id)}
+                      >
+                        i
+                      </button>
+                    ) : (
+                      <span className="icon-detail disabled" title="No linked event">
+                        i
+                      </span>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       ) : null}
 
       {selectedProduct && customer ? (
@@ -525,62 +515,11 @@ export default function App() {
         </div>
       ) : null}
 
-      {payTarget && customer ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setPayTarget(null)}>
-          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <p className="story-kicker">Before you pay</p>
-            <h3>
-              Pay installment {payTarget.sequence}/{payTarget.plan_size}
-            </h3>
-            <p className="muted">
-              {payTarget.product_name} · {money(payTarget.currency, payTarget.amount)} ·{" "}
-              <span className={statusClass(payTarget.status)}>{payTarget.status}</span>
-            </p>
-
-            <div className="prepay-flow">
-              <div className="prepay-step">
-                <strong>A. Your payment</strong>
-                <p>We collect this installment now (RPM repayment).</p>
-              </div>
-              <div className="prepay-step ai">
-                <strong>B. AI decision</strong>
-                <p>
-                  AI then reviews <strong>other overdue</strong> still open
-                  {otherOverdueIfPay > 0
-                    ? ` (${money(payTarget.currency, otherOverdueIfPay)})`
-                    : " (none right now)"}
-                  .
-                </p>
-              </div>
-              <div className="prepay-step">
-                <strong>C. Autopay</strong>
-                <p>
-                  Only if AI says charge/partial, Autopay hits the saved card for that extra
-                  overdue — not for the installment you just chose to pay.
-                </p>
-              </div>
-            </div>
-
-            <div className="modal-actions">
-              <button type="button" className="ghost" onClick={() => setPayTarget(null)}>
-                Cancel
-              </button>
-              <button type="button" className="primary" disabled={loading} onClick={confirmPay}>
-                {loading ? "Running Smart Autocharge…" : "Confirm pay & run AI"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showStory && lastResult ? (
+      {detail ? (
         <PaymentStory
-          result={lastResult}
+          detail={detail}
           visibleSteps={storySteps}
-          onClose={() => {
-            setShowStory(false);
-            setTab("payments");
-          }}
+          onClose={() => setDetail(null)}
         />
       ) : null}
 

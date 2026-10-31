@@ -807,3 +807,127 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: white;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.chip.active {
+  background: linear-gradient(135deg, #9600f1, #5300ba);
+  color: white;
+  border-color: transparent;
+}
+
+.history-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: white;
+}
+
+.history-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.history-side {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.history-amount {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.icon-detail {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(150, 0, 241, 0.35);
+  background: linear-gradient(180deg, #f7f0ff, #fff);
+  color: var(--zingy);
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, serif;
+  cursor: pointer;
+}
+
+.icon-detail:hover:not(:disabled) {
+  background: var(--lilac);
+}
+
+.icon-detail.disabled,
+.icon-detail:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tag-type-manual_repayment {
+  background: rgba(15, 122, 74, 0.12);
+  color: var(--success);
+}
+
+.tag-type-normal_autocharge {
+  background: rgba(107, 98, 128, 0.14);
+  color: #4d4660;
+}
+
+.tag-type-smart_autocharge {
+  background: rgba(150, 0, 241, 0.14);
+  color: var(--zingy);
+}
+
+.type-legend {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.legend-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.7fr 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .history-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .legend-row {
+    grid-template-columns: 1fr;
+  }
+}

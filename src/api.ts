@@ -4,6 +4,8 @@ import type {
   Installment,
   OrchestrationResult,
   Order,
+  PaymentDetail,
+  PaymentHistoryItem,
   Product,
 } from "./types";
 
@@ -33,8 +35,10 @@ export const fetchOrders = (customerId: string) =>
   request<{ orders: Order[] }>(`/api/customers/${customerId}/orders`);
 export const fetchInstallments = (customerId: string) =>
   request<{ installments: Installment[] }>(`/api/customers/${customerId}/installments`);
-export const fetchDecisions = () =>
-  request<{ decisions: OrchestrationResult[] }>("/api/decisions");
+export const fetchPaymentHistory = (customerId: string) =>
+  request<{ history: PaymentHistoryItem[] }>(`/api/customers/${customerId}/payment-history`);
+export const fetchPaymentDetail = (eventId: string) =>
+  request<PaymentDetail>(`/api/payment-events/${eventId}`);
 
 export const checkout = (customerId: string, productId: string, plan: number) =>
   request<CheckoutResult>("/api/checkout", {
