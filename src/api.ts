@@ -1,4 +1,11 @@
-import type { Customer, OrchestrationResult } from "./types";
+import type {
+  CheckoutResult,
+  Customer,
+  Installment,
+  OrchestrationResult,
+  Order,
+  Product,
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -8,27 +15,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed (${response.status})`);
+    let detail = `Request failed (${response.status})`;
+    try {
+      const body = await response.json();
+      detail = body.detail ?? detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
   }
   return response.json() as Promise<T>;
 }
 
-export function fetchCustomers(): Promise<{ customers: Customer[] }> {
-  return request("/api/customers");
-}
+export const fetchCustomers = () => request<{ customers: Customer[] }>("/api/customers");
+export const fetchProducts = () => request<{ products: Product[] }>("/api/products");
+export const fetchOrders = (customerId: string) =>
+  request<{ orders: Order[] }>(`/api/customers/${customerId}/orders`);
+export const fetchInstallments = (customerId: string) =>
+  request<{ installments: Installment[] }>(`/api/customers/${customerId}/installments`);
+export const fetchDecisions = () =>
+  request<{ decisions: OrchestrationResult[] }>("/api/decisions");
 
-export function repay(customerId: string, amount: number, currency = "SAR"): Promise<OrchestrationResult> {
-  return request("/api/rpm/repay", {
+export const checkout = (customerId: string, productId: string, plan: number) =>
+  request<CheckoutResult>("/api/checkout", {
     method: "POST",
-    body: JSON.stringify({ customer_id: customerId, amount, currency }),
+    body: JSON.stringify({ customer_id: customerId, product_id: productId, plan }),
   });
-}
 
-export function resetDemo(): Promise<{ status: string; customers: Customer[] }> {
-  return request("/api/admin/reset", { method: "POST" });
-}
+export const payInstallment = (installmentId: string, customerId: string) =>
+  request<OrchestrationResult>(`/api/installments/${installmentId}/pay`, {
+    method: "POST",
+    body: JSON.stringify({ customer_id: customerId }),
+  });
 
-export function fetchDecisions(): Promise<{ decisions: OrchestrationResult[] }> {
-  return request("/api/decisions");
-}
+export const resetDemo = () =>
+  request<{ status: string }>("/api/admin/reset", { method: "POST" });
