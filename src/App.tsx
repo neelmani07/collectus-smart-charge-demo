@@ -314,13 +314,13 @@ export default function App() {
         <div className="hero-card">
           <h2>Own your dream. Pay your way.</h2>
           <p>
-            Pay your installments anytime. Autopay only runs in the daily collections window —
-            Smart Autocharge decides then, not when you repay.
+            Pay your installments anytime. Smart Autocharge can run from a repayment event (AI).
+            Normal autocharge runs on the daily cron. Both only touch overdue — never upcoming.
           </p>
           <div className="pill-row">
             <span className="pill">Sharia compliant</span>
             <span className="pill">No late fees</span>
-            <span className="pill">Cron Autopay</span>
+            <span className="pill">Overdue only</span>
           </div>
         </div>
         <div className="panel stat-card">
@@ -456,7 +456,7 @@ export default function App() {
             <h2 className="section-title">Payment history</h2>
             <div className="history-actions">
               <button type="button" className="ghost" disabled={loading} onClick={onRunCron}>
-                Simulate 09:00 cron
+                Simulate normal autocharge (09:00 cron)
               </button>
               <button type="button" className="ghost" disabled={loading} onClick={onReset}>
                 Reset demo
@@ -464,8 +464,9 @@ export default function App() {
             </div>
           </div>
           <p className="muted cron-hint">
-            Autopay runs on the daily collections cron (demo: button above). Manual repayments never
-            trigger Autopay.
+            <strong>Smart autocharge</strong> = repayment event + AI (overdue only).{" "}
+            <strong>Normal autocharge</strong> = daily cron (overdue only, no AI). Upcoming is never
+            autocharged.
           </p>
 
           <div className="history-filters">
@@ -474,6 +475,7 @@ export default function App() {
                 ["all", "All"],
                 ["manual_repayment", "Manual repayment"],
                 ["smart_autocharge", "Smart autocharge"],
+                ["normal_autocharge", "Normal autocharge"],
               ] as const
             ).map(([id, label]) => (
               <button

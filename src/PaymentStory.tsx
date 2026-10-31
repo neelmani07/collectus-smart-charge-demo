@@ -27,96 +27,119 @@ export function PaymentStory({ detail, visibleSteps, onClose }: Props) {
   const smart = detail.history.find((h) => h.payment_type === "smart_autocharge") as
     | PaymentHistoryItem
     | undefined;
-  const currency = manual?.currency ?? smart?.currency ?? "SAR";
-  const isCron = Boolean(smart?.details?.trigger === "cron" || detail.orchestration?.trigger === "cron");
-  const normalWould = Number(
-    smart?.details?.normal_would_charge_amount ?? detail.orchestration?.overdue_before ?? 0,
-  );
+  const normal = detail.history.find((h) => h.payment_type === "normal_autocharge") as
+    | PaymentHistoryItem
+    | undefined;
 
-  const steps = isCron
-    ? [
-        {
-          title: "1 · Collections cron window",
-          body: (
-            <>
-              Scheduled collections ran at{" "}
-              <strong>{String(smart?.details?.scheduled_for ?? detail.orchestration?.scheduled_for ?? "09:00")}</strong>
-              . This is the only time Autopay is allowed to run — not right after a customer payment.
-            </>
-          ),
-          meta: `event: ${detail.event_id.slice(0, 18)}…`,
-        },
-        {
-          title: "2 · What normal autocharge would do",
-          body: (
-            <>
-              Blind cron autocharge would attempt{" "}
-              <strong>{money(currency, normalWould)}</strong> overdue with no AI check. It was{" "}
-              <strong>not executed</strong> — Smart mode replaced it.
-            </>
-          ),
-          meta: String(smart?.details?.normal_note ?? "Reference only"),
-        },
-        {
-          title: "3 · Smart autocharge (AI decision)",
-          body: smart ? (
-            <>
-              AI chose <strong>{String(smart.details.ai_action ?? "—")}</strong>
-              {smart.details.ai_reason ? <> — {String(smart.details.ai_reason)}</> : null}
-            </>
-          ) : (
-            <>No smart decision recorded.</>
-          ),
-          meta: smart
-            ? `Score ${Number(smart.details.ai_score ?? 0).toFixed(2)}`
-            : null,
-          highlight: true,
-        },
-        {
-          title: "4 · Autopay result",
-          body: smart ? (
-            smart.status === "succeeded" ? (
+  const currency =
+    manual?.currency ?? smart?.currency ?? normal?.currency ?? "SAR";
+
+  const kind = smart ? "smart" : normal ? "normal" : "manual";
+
+  const steps =
+    kind === "smart"
+      ? [
+          {
+            title: "1 · Repayment event",
+            body: (
               <>
-                Autopay charged <strong>{money(currency, smart.amount)}</strong>. Overdue{" "}
-                {Number(smart.details.overdue_before ?? 0).toFixed(2)} →{" "}
-                {Number(smart.details.overdue_after ?? 0).toFixed(2)}.
+                A customer repayment published <code>repayment.succeeded</code>. That event wakes
+                Smart Autocharge — not the daily cron.
               </>
-            ) : (
+            ),
+            meta: smart?.details?.parent_repay_event_id
+              ? `linked repay: ${String(smart.details.parent_repay_event_id).slice(0, 18)}…`
+              : `event: ${detail.event_id.slice(0, 18)}…`,
+          },
+          {
+            title: "2 · AI decision",
+            body: (
               <>
-                Autopay did not collect extra ({smart.status.replaceAll("_", " ")}).
+                AI reviewed <strong>overdue only</strong> (never upcoming) and chose{" "}
+                <strong>{String(smart?.details.ai_action ?? "—")}</strong>
+                {smart?.details.ai_reason ? <> — {String(smart.details.ai_reason)}</> : null}.
               </>
-            )
-          ) : (
-            <>No Autopay result.</>
-          ),
-          meta: smart ? String(smart.details.autopay_message ?? smart.status) : null,
-        },
-      ]
-    : [
-        {
-          title: "1 · Manual repayment",
-          body: manual ? (
-            <>
-              You paid <strong>{money(currency, manual.amount)}</strong>
-              {manual.product_name ? ` for ${manual.product_name}` : ""}. Autopay was{" "}
-              <strong>not</strong> triggered by this payment.
-            </>
-          ) : (
-            <>Manual repayment recorded.</>
-          ),
-          meta: manual ? `Status: ${manual.status}` : null,
-        },
-        {
-          title: "2 · Activity noted",
-          body: (
-            <>
-              Your repayment was saved as activity. Smart Autocharge only runs in the daily
-              collections cron window (e.g. 09:00), not immediately after you pay.
-            </>
-          ),
-          meta: `event: ${detail.event_id.slice(0, 18)}…`,
-        },
-      ];
+            ),
+            meta: `Score ${Number(smart?.details.ai_score ?? 0).toFixed(2)}`,
+            highlight: true,
+          },
+          {
+            title: "3 · Autopay",
+            body:
+              smart?.status === "succeeded" ? (
+                <>
+                  Autopay collected <strong>{money(currency, smart.amount)}</strong> from overdue
+                  installments. Overdue {Number(smart.details.overdue_before ?? 0).toFixed(2)} →{" "}
+                  {Number(smart.details.overdue_after ?? 0).toFixed(2)}.
+                </>
+              ) : (
+                <>Autopay did not charge ({String(smart?.status ?? "").replaceAll("_", " ")}).</>
+              ),
+            meta: String(smart?.details.autopay_message ?? ""),
+          },
+        ]
+      : kind === "normal"
+        ? [
+            {
+              title: "1 · Scheduled cron",
+              body: (
+                <>
+                  Daily collections cron ran at{" "}
+                  <strong>{String(normal?.details.scheduled_for ?? "09:00")}</strong>. This is{" "}
+                  <em>normal</em> autocharge — schedule-based, no AI.
+                </>
+              ),
+              meta: `event: ${detail.event_id.slice(0, 18)}…`,
+            },
+            {
+              title: "2 · Overdue only",
+              body: (
+                <>
+                  System targeted <strong>overdue</strong> installments only — upcoming payments are
+                  never autocharged.
+                </>
+              ),
+              meta: `Overdue before: ${money(currency, Number(normal?.details.overdue_before ?? normal?.amount ?? 0))}`,
+            },
+            {
+              title: "3 · Autopay",
+              body:
+                normal?.status === "succeeded" ? (
+                  <>
+                    Autopay charged <strong>{money(currency, normal.amount)}</strong> with no AI
+                    gate.
+                  </>
+                ) : (
+                  <>Autopay failed or skipped ({String(normal?.status).replaceAll("_", " ")}).</>
+                ),
+              meta: String(normal?.details.autopay_message ?? normal?.status ?? ""),
+            },
+          ]
+        : [
+            {
+              title: "1 · Manual repayment",
+              body: manual ? (
+                <>
+                  You paid <strong>{money(currency, manual.amount)}</strong>
+                  {manual.product_name ? ` for ${manual.product_name}` : ""}.
+                </>
+              ) : (
+                <>Manual repayment recorded.</>
+              ),
+              meta: manual ? `Status: ${manual.status}` : null,
+            },
+            {
+              title: "2 · What happens next",
+              body: (
+                <>
+                  If you still have <strong>overdue</strong> installments, Smart Autocharge may run
+                  from this repayment event (AI + Autopay). Upcoming installments are never
+                  autocharged. Normal autocharge only runs on the daily cron.
+                </>
+              ),
+              meta: `event: ${detail.event_id.slice(0, 18)}…`,
+            },
+          ];
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -127,29 +150,20 @@ export function PaymentStory({ detail, visibleSteps, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <p className="story-kicker">Payment details</p>
-        <h3>{isCron ? "Smart Autocharge (cron)" : "Manual repayment"}</h3>
+        <h3>
+          {kind === "smart"
+            ? "Smart autocharge (event + AI)"
+            : kind === "normal"
+              ? "Normal autocharge (cron)"
+              : "Manual repayment"}
+        </h3>
         <p className="muted story-lede">
-          {isCron
-            ? "Autopay runs only on the scheduled collections window, gated by AI."
-            : "This was your own installment payment only."}
+          {kind === "smart"
+            ? "Triggered by a repayment event. AI decides; Autopay may collect overdue only."
+            : kind === "normal"
+              ? "Triggered by the daily schedule. No AI. Overdue only."
+              : "Your own installment payment."}
         </p>
-
-        {isCron ? (
-          <div className="story-compare">
-            <div className="mini-card">
-              <span className="mini-label">Normal autocharge</span>
-              <strong className={typeClass("normal_autocharge")}>Not executed</strong>
-              <p>Would have charged {money(currency, normalWould)}</p>
-            </div>
-            <div className="mini-card smart">
-              <span className="mini-label">Smart autocharge</span>
-              <strong className={typeClass("smart_autocharge")}>
-                {String(smart?.details.ai_action ?? smart?.status ?? "—")}
-              </strong>
-              <p>{String(smart?.details.ai_reason ?? "")}</p>
-            </div>
-          </div>
-        ) : null}
 
         {detail.history.length > 0 ? (
           <div className="type-legend">
@@ -167,7 +181,7 @@ export function PaymentStory({ detail, visibleSteps, onClose }: Props) {
           {steps.map((step, index) => (
             <li
               key={step.title}
-              className={`story-step ${index < visibleSteps ? "visible" : ""} ${step.highlight ? "ai" : ""}`}
+              className={`story-step ${index < visibleSteps ? "visible" : ""} ${"highlight" in step && step.highlight ? "ai" : ""}`}
             >
               <div className="story-rail" aria-hidden />
               <div className="story-copy">
