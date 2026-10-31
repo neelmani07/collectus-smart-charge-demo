@@ -1,8 +1,8 @@
 import type {
   CheckoutResult,
+  CronRunResult,
   Customer,
-  Installment,
-  OrchestrationResult,
+  ManualPayResult,
   Order,
   PaymentDetail,
   PaymentHistoryItem,
@@ -30,11 +30,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const fetchCustomers = () => request<{ customers: Customer[] }>("/api/customers");
+export const fetchCustomer = (customerId: string) =>
+  request<Customer>(`/api/customers/${customerId}`);
 export const fetchProducts = () => request<{ products: Product[] }>("/api/products");
 export const fetchOrders = (customerId: string) =>
   request<{ orders: Order[] }>(`/api/customers/${customerId}/orders`);
-export const fetchInstallments = (customerId: string) =>
-  request<{ installments: Installment[] }>(`/api/customers/${customerId}/installments`);
 export const fetchPaymentHistory = (customerId: string) =>
   request<{ history: PaymentHistoryItem[] }>(`/api/customers/${customerId}/payment-history`);
 export const fetchPaymentDetail = (eventId: string) =>
@@ -47,9 +47,18 @@ export const checkout = (customerId: string, productId: string, plan: number) =>
   });
 
 export const payInstallment = (installmentId: string, customerId: string) =>
-  request<OrchestrationResult>(`/api/installments/${installmentId}/pay`, {
+  request<ManualPayResult>(`/api/installments/${installmentId}/pay`, {
     method: "POST",
     body: JSON.stringify({ customer_id: customerId }),
+  });
+
+export const runCollectionsCron = (customerId?: string, scheduledFor = "09:00") =>
+  request<CronRunResult>("/api/cron/collections", {
+    method: "POST",
+    body: JSON.stringify({
+      customer_id: customerId ?? null,
+      scheduled_for: scheduledFor,
+    }),
   });
 
 export const resetDemo = () =>

@@ -14,6 +14,7 @@ export interface Customer {
   notes: string;
   overdue_amount: number;
   days_overdue: number;
+  last_activity_at?: string | null;
 }
 
 export interface Product {
@@ -63,6 +64,17 @@ export interface CheckoutResult {
   message: string;
 }
 
+export interface ManualPayResult {
+  event_id: string;
+  customer_id: string;
+  installment_id: string;
+  amount_paid: number;
+  currency: string;
+  product_name: string;
+  message: string;
+  created_at: string;
+}
+
 export interface Decision {
   action: DecisionAction;
   amount: number;
@@ -93,6 +105,16 @@ export interface OrchestrationResult {
   overdue_after: number;
   created_at: string;
   order_snapshot: Order | null;
+  trigger?: string;
+  scheduled_for?: string | null;
+}
+
+export interface CronRunResult {
+  scheduled_for: string;
+  customers_scanned: number;
+  customers_charged: number;
+  customers_skipped: number;
+  message: string;
 }
 
 export interface PaymentHistoryItem {

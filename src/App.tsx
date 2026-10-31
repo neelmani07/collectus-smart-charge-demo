@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   checkout,
+  fetchCustomer,
   fetchCustomers,
   fetchOrders,
   fetchPaymentDetail,
@@ -8,6 +9,7 @@ import {
   fetchProducts,
   payInstallment,
   resetDemo,
+  runCollectionsCron,
 } from "./api";
 import { PaymentStory } from "./PaymentStory";
 import type {
@@ -20,6 +22,8 @@ import type {
   Product,
   Tab,
 } from "./types";
+
+const SESSION_KEY = "collectus_customer_id";
 
 function money(currency: string, amount: number) {
   return `${currency} ${amount.toFixed(2)}`;
@@ -48,9 +52,9 @@ function formatWhen(iso: string) {
 }
 
 export default function App() {
+  const [accounts, setAccounts] = useState<Customer[]>([]);
+  const [customer, setCustomer] = useState<Customer | null>(null);
   const [tab, setTab] = useState<Tab>("shop");
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [customerId, setCustomerId] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [history, setHistory] = useState<PaymentHistoryItem[]>([]);
@@ -62,48 +66,43 @@ export default function App() {
   const [detail, setDetail] = useState<PaymentDetail | null>(null);
   const [storySteps, setStorySteps] = useState(0);
   const [historyFilter, setHistoryFilter] = useState<"all" | PaymentType>("all");
-
-  const customer = useMemo(
-    () => customers.find((c) => c.customer_id === customerId) ?? null,
-    [customers, customerId],
-  );
+  const [booting, setBooting] = useState(true);
 
   const filteredHistory = useMemo(() => {
     if (historyFilter === "all") return history;
     return history.filter((h) => h.payment_type === historyFilter);
   }, [history, historyFilter]);
 
-  const load = useCallback(async (selected?: string) => {
-    const activeId = selected ?? customerId;
-    const [{ customers: list }, { products: catalog }] = await Promise.all([
-      fetchCustomers(),
-      fetchProducts(),
-    ]);
-    setCustomers(list);
-    setProducts(catalog);
-
-    const nextId =
-      activeId && list.some((c) => c.customer_id === activeId)
-        ? activeId
-        : (list[0]?.customer_id ?? "");
-    setCustomerId(nextId);
-
-    if (nextId) {
-      const [{ orders: orderList }, { history: paymentHistory }] = await Promise.all([
-        fetchOrders(nextId),
-        fetchPaymentHistory(nextId),
+  const loadAccountData = useCallback(async (customerId: string) => {
+    const [me, { products: catalog }, { orders: orderList }, { history: paymentHistory }] =
+      await Promise.all([
+        fetchCustomer(customerId),
+        fetchProducts(),
+        fetchOrders(customerId),
+        fetchPaymentHistory(customerId),
       ]);
-      setOrders(orderList);
-      setHistory(paymentHistory);
-    } else {
-      setOrders([]);
-      setHistory([]);
-    }
-  }, [customerId]);
+    setCustomer(me);
+    setProducts(catalog);
+    setOrders(orderList);
+    setHistory(paymentHistory);
+  }, []);
 
   useEffect(() => {
-    load().catch((err: Error) => setError(err.message));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    (async () => {
+      try {
+        const { customers } = await fetchCustomers();
+        setAccounts(customers);
+        const saved = window.sessionStorage.getItem(SESSION_KEY);
+        if (saved && customers.some((c) => c.customer_id === saved)) {
+          await loadAccountData(saved);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to start");
+      } finally {
+        setBooting(false);
+      }
+    })();
+  }, [loadAccountData]);
 
   useEffect(() => {
     if (!toast) return;
@@ -114,28 +113,36 @@ export default function App() {
   useEffect(() => {
     if (!detail) return;
     setStorySteps(0);
-    const timers = [1, 2, 3, 4].map((step, index) =>
-      window.setTimeout(() => setStorySteps(step), 350 + index * 550),
+    const max = detail.history.some((h) => h.payment_type === "smart_autocharge") ? 4 : 2;
+    const timers = Array.from({ length: max }, (_, index) =>
+      window.setTimeout(() => setStorySteps(index + 1), 300 + index * 500),
     );
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [detail?.event_id]);
 
-  async function onCustomerChange(id: string) {
-    setCustomerId(id);
+  async function loginAs(customerId: string) {
+    setLoading(true);
     setError(null);
     try {
-      const [{ orders: orderList }, { history: paymentHistory }, { customers: list }] =
-        await Promise.all([
-          fetchOrders(id),
-          fetchPaymentHistory(id),
-          fetchCustomers(),
-        ]);
-      setCustomers(list);
-      setOrders(orderList);
-      setHistory(paymentHistory);
+      window.sessionStorage.setItem(SESSION_KEY, customerId);
+      await loadAccountData(customerId);
+      setTab("shop");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load customer");
+      setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setLoading(false);
     }
+  }
+
+  function logout() {
+    window.sessionStorage.removeItem(SESSION_KEY);
+    setCustomer(null);
+    setOrders([]);
+    setHistory([]);
+    setProducts([]);
+    setDetail(null);
+    setSelectedProduct(null);
+    setError(null);
   }
 
   async function confirmCheckout() {
@@ -145,9 +152,9 @@ export default function App() {
     try {
       const result = await checkout(customer.customer_id, selectedProduct.product_id, plan);
       setSelectedProduct(null);
-      setToast(`Paid ${money(result.order.currency, result.first_payment_amount)} · order created`);
+      setToast(`Paid ${money(result.order.currency, result.first_payment_amount)}`);
       setTab("payments");
-      await load(customer.customer_id);
+      await loadAccountData(customer.customer_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Checkout failed");
     } finally {
@@ -160,9 +167,9 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      await payInstallment(inst.installment_id, customer.customer_id);
-      setToast(`Payment successful · ${money(inst.currency, inst.amount)}`);
-      await load(customer.customer_id);
+      const result = await payInstallment(inst.installment_id, customer.customer_id);
+      setToast(result.message);
+      await loadAccountData(customer.customer_id);
       setTab("history");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Payment failed");
@@ -176,8 +183,7 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const payload = await fetchPaymentDetail(eventId);
-      setDetail(payload);
+      setDetail(await fetchPaymentDetail(eventId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load details");
     } finally {
@@ -185,21 +191,83 @@ export default function App() {
     }
   }
 
+  async function onRunCron() {
+    if (!customer) return;
+    setLoading(true);
+    setError(null);
+    try {
+      // Only run cron for the logged-in customer — never leak other accounts into this session
+      const result = await runCollectionsCron(customer.customer_id, "09:00");
+      setToast(result.message);
+      await loadAccountData(customer.customer_id);
+      setTab("history");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cron failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onReset() {
+    if (!customer) return;
     setLoading(true);
     setError(null);
     try {
       await resetDemo();
-      setSelectedProduct(null);
-      setDetail(null);
+      const { customers } = await fetchCustomers();
+      setAccounts(customers);
+      await loadAccountData(customer.customer_id);
       setToast("Demo data reset");
-      await load("");
       setTab("shop");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (booting) {
+    return (
+      <div className="app">
+        <p className="muted">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!customer) {
+    return (
+      <div className="app">
+        <section className="login-shell">
+          <div className="login-card">
+            <div className="brand login-brand">
+              <div className="logo-mark" aria-hidden />
+              <div>
+                <h1>Tamara</h1>
+                <p>Sign in to your account</p>
+              </div>
+            </div>
+            <p className="muted login-copy">
+              Choose your account. After login you’ll only see your own purchases and payments.
+            </p>
+            {error ? <p className="error">{error}</p> : null}
+            <div className="account-list">
+              {accounts.map((account) => (
+                <button
+                  key={account.customer_id}
+                  type="button"
+                  className="account-btn"
+                  disabled={loading}
+                  onClick={() => loginAs(account.customer_id)}
+                >
+                  <strong>{account.name}</strong>
+                  <span className="muted">Continue</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
   }
 
   const overdueCount = orders
@@ -213,24 +281,12 @@ export default function App() {
           <div className="logo-mark" aria-hidden />
           <div>
             <h1>Tamara</h1>
-            <p>Collectus · Smart Autocharge demo</p>
+            <p>Hi, {customer.name}</p>
           </div>
         </div>
         <div className="top-actions">
-          <select
-            className="customer-select"
-            value={customerId}
-            onChange={(e) => onCustomerChange(e.target.value)}
-            aria-label="Demo customer"
-          >
-            {customers.map((c) => (
-              <option key={c.customer_id} value={c.customer_id}>
-                {c.name} · {c.scenario.replaceAll("_", " ")}
-              </option>
-            ))}
-          </select>
-          <button type="button" className="ghost" onClick={onReset} disabled={loading}>
-            Reset demo
+          <button type="button" className="ghost" onClick={logout}>
+            Log out
           </button>
         </div>
       </header>
@@ -258,39 +314,35 @@ export default function App() {
         <div className="hero-card">
           <h2>Own your dream. Pay your way.</h2>
           <p>
-            Shop in installments. Pay only what you owe when you want — just like Tamara. Smart
-            Autocharge runs quietly in the background; inspect it anytime in Payment history.
+            Pay your installments anytime. Autopay only runs in the daily collections window —
+            Smart Autocharge decides then, not when you repay.
           </p>
           <div className="pill-row">
             <span className="pill">Sharia compliant</span>
             <span className="pill">No late fees</span>
-            <span className="pill">Pay in 3 or 4</span>
+            <span className="pill">Cron Autopay</span>
           </div>
         </div>
         <div className="panel stat-card">
-          <h3>Customer snapshot</h3>
-          {customer ? (
-            <div className="stat-grid">
-              <div className="stat">
-                <strong>{money(customer.currency, customer.overdue_amount)}</strong>
-                <span>Overdue balance</span>
-              </div>
-              <div className="stat">
-                <strong>{overdueCount}</strong>
-                <span>Due / overdue items</span>
-              </div>
-              <div className="stat">
-                <strong>{customer.pm_health.toFixed(2)}</strong>
-                <span>Payment method health</span>
-              </div>
-              <div className="stat">
-                <strong>{history.length}</strong>
-                <span>History entries</span>
-              </div>
+          <h3>Your snapshot</h3>
+          <div className="stat-grid">
+            <div className="stat">
+              <strong>{money(customer.currency, customer.overdue_amount)}</strong>
+              <span>Overdue balance</span>
             </div>
-          ) : (
-            <p className="muted">Loading customer…</p>
-          )}
+            <div className="stat">
+              <strong>{overdueCount}</strong>
+              <span>Due / overdue</span>
+            </div>
+            <div className="stat">
+              <strong>{orders.length}</strong>
+              <span>Purchases</span>
+            </div>
+            <div className="stat">
+              <strong>{history.length}</strong>
+              <span>History</span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -346,7 +398,7 @@ export default function App() {
         <section className="panel">
           <div className="panel-head">
             <h2 className="section-title">My payments</h2>
-            <p className="muted">Pay your installment — that’s all you need to do here</p>
+            <p className="muted">Pay your installment only</p>
           </div>
           {orders.length === 0 ? (
             <p className="muted">No purchases yet — grab something from Shop.</p>
@@ -402,15 +454,25 @@ export default function App() {
         <section className="panel">
           <div className="panel-head">
             <h2 className="section-title">Payment history</h2>
-            <p className="muted">Manual · Normal autocharge · Smart autocharge</p>
+            <div className="history-actions">
+              <button type="button" className="ghost" disabled={loading} onClick={onRunCron}>
+                Simulate 09:00 cron
+              </button>
+              <button type="button" className="ghost" disabled={loading} onClick={onReset}>
+                Reset demo
+              </button>
+            </div>
           </div>
+          <p className="muted cron-hint">
+            Autopay runs on the daily collections cron (demo: button above). Manual repayments never
+            trigger Autopay.
+          </p>
 
           <div className="history-filters">
             {(
               [
                 ["all", "All"],
                 ["manual_repayment", "Manual repayment"],
-                ["normal_autocharge", "Normal autocharge"],
                 ["smart_autocharge", "Smart autocharge"],
               ] as const
             ).map(([id, label]) => (
@@ -426,7 +488,7 @@ export default function App() {
           </div>
 
           {filteredHistory.length === 0 ? (
-            <p className="muted">No payments yet. Pay an installment to populate history.</p>
+            <p className="muted">No payments yet.</p>
           ) : (
             <div className="history-list">
               {filteredHistory.map((item) => (
@@ -458,9 +520,7 @@ export default function App() {
                         i
                       </button>
                     ) : (
-                      <span className="icon-detail disabled" title="No linked event">
-                        i
-                      </span>
+                      <span className="icon-detail disabled">i</span>
                     )}
                   </div>
                 </article>
@@ -470,7 +530,7 @@ export default function App() {
         </section>
       ) : null}
 
-      {selectedProduct && customer ? (
+      {selectedProduct ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setSelectedProduct(null)}>
           <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <h3>{selectedProduct.name}</h3>
@@ -482,7 +542,6 @@ export default function App() {
               <span className="trust">No late fees</span>
               <span className="trust">Buyer protection</span>
             </div>
-            <p className="muted">Choose your plan — pay the first installment today.</p>
             <div className="plan-options">
               {[3, 4].map((n) => {
                 const installment = selectedProduct.price / n;
@@ -516,11 +575,7 @@ export default function App() {
       ) : null}
 
       {detail ? (
-        <PaymentStory
-          detail={detail}
-          visibleSteps={storySteps}
-          onClose={() => setDetail(null)}
-        />
+        <PaymentStory detail={detail} visibleSteps={storySteps} onClose={() => setDetail(null)} />
       ) : null}
 
       {toast ? <div className="toast">{toast}</div> : null}
