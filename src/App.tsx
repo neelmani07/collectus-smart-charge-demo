@@ -188,7 +188,14 @@ export default function App() {
     try {
       setDetail(await fetchPaymentDetail(eventId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load details");
+      const message = err instanceof Error ? err.message : "Could not load details";
+      if (/not found/i.test(message) && customer) {
+        // The demo was reset (e.g. in another tab) after this list loaded.
+        await loadAccountData(customer.customer_id);
+        setError("That payment was cleared by a demo reset — your account has been refreshed.");
+        return;
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -304,7 +311,7 @@ export default function App() {
             ["payments", "My payments"],
             ["history", "Payment history"],
             ["insights", "Why AI?"],
-            ["try", "Try the AI"],
+            ["try", "Try Smart Autocharge"],
           ] as const
         ).map(([id, label]) => (
           <button

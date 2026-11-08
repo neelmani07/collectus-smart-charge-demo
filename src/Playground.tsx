@@ -126,7 +126,7 @@ export function Playground() {
     <section className="panel playground">
       <div className="panel-head">
         <div>
-          <h2 className="section-title">Try the AI with your own customer</h2>
+          <h2 className="section-title">Try Smart Autocharge with your own customer</h2>
           <p className="muted">
             Change anything and the live model decides instantly. Nothing is charged or saved.
           </p>

@@ -9,7 +9,7 @@ Tamara-styled demo UI for Collectus Smart Autocharge.
 - **My payments** — installment timeline per purchase, Pay now; snapshot shows the card on file and scheme declines left this month (Mada 3, Visa/Mastercard 6)
 - **Payment history** — manual repayments, Smart autocharge (event + AI) and normal cron autocharge; the ⓘ panel shows the AI decision: charge/skip, card, declines left, P(success) bar with the threshold, drivers and next best action
 - **Why AI?** — 30-day backtest from the AI service: KPI tiles, recovered % and failed-attempt charts, table view, impact calculator and "What the model learned"
-- **Try the AI** — playground: set any customer's card, history and amounts (repayment or cron day) and the live model decides; nothing is charged or saved
+- **Try Smart Autocharge** — playground: set any customer's card, history and amounts (repayment or cron day) and the live model decides; nothing is charged or saved
 
 ## Quick start
 
